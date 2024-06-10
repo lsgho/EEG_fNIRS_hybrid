@@ -6,6 +6,24 @@ import logging
 from einops import rearrange, repeat
 from torch.utils.data import Dataset
 from sklearn.utils import shuffle
+from argument import args
+from pyts.image import GramianAngularField
+from pyts.preprocessing import MaxAbsScaler
+
+
+def GAF(data, stype='eeg'):
+    if stype == 'eeg':
+        gaf = GramianAngularField(image_size=1/args.window_size)
+    else:
+        gaf = GramianAngularField()
+    scaler = MaxAbsScaler()
+    trial, channel = data.shape[0], data.shape[1]
+    data_list = []
+    for i in range(trial):
+        data_ = scaler.transform(data[i])
+        data_ = gaf.transform(data_)
+        data_list.append(data_)
+    return torch.cat(data_list)
 
 
 class EEGData:
@@ -16,12 +34,13 @@ class EEGData:
         self.load_data()
 
     def load_data(self):
-        subs_list = os.listdir(args.eeg_path)
+        eeg_path = args.dataset_path + 'EEG'
+        subs_list = os.listdir(eeg_path)
         task_data = []
         labels = []
 
         for i in range(args.sub_num):
-            sub_path = os.path.join(args.eeg_path, subs_list[i], 'sub{}_{}'.format(i+1, args.task))
+            sub_path = os.path.join(eeg_path, subs_list[i], 'sub{}_{}'.format(i+1, args.task))
             sub_data_all = sio.loadmat(sub_path)['epo'][0,0]
 
             sub_label = sub_data_all['label']
@@ -49,13 +68,14 @@ class NirsData:
         self.load_data()
 
     def load_data(self):
-        subs_list = os.listdir(args.nirs_path)
+        nirs_path = args.dataset_path + 'NIRS'
+        subs_list = os.listdir(nirs_path)
         task_hbo = []
         task_hbr = []
         labels = []
 
         for i in range(args.sub_num):
-            sub_path = os.path.join(args.nirs_path, subs_list[i], 'sub{}_{}'.format(i+1, args.task))
+            sub_path = os.path.join(nirs_path, subs_list[i], 'sub{}_{}'.format(i+1, args.task))
             sub_data_all = sio.loadmat(sub_path)[args.task][0,0]
 
             sub_label = sub_data_all['label']
@@ -111,13 +131,11 @@ class HybirdData:
 
     def get_proc_data(self):
         eeg_data, eeg_labels, nirs_data, nirs_labels = self.get_raw_data()
-        eeg_data = repeat(eeg_data, 'num trial channel time -> num trial c channel time', c=1)
-        eeg_data = rearrange(eeg_data, 'num trial c channel time -> (num trial) c channel time')
+        eeg_data = rearrange(eeg_data, 'num trial channel time -> (num trial) channel time')
         eeg_labels = rearrange(eeg_labels, 'num trial -> (num trial)')
 
         if len(nirs_data.shape) == 4:
-            nirs_data = repeat(nirs_data, 'num trial channel time -> num trial c channel time', c=1)
-            nirs_data = rearrange(nirs_data, 'num trial c channel time -> (num trial) c channel time')
+            nirs_data = rearrange(nirs_data, 'num trial channel time -> (num trial) channel time')
         elif len(nirs_data.shape) == 5:
             nirs_data = rearrange(nirs_data, 'num trial c channel time -> (num trial) c channel time')
         nirs_labels = rearrange(nirs_labels, 'num trial -> (num trial)')
@@ -125,12 +143,8 @@ class HybirdData:
 
     def preprocess(self, data):
         eeg_data, eeg_labels, nirs_data, nirs_labels = data
-        eeg_mean = torch.mean(eeg_data, dim=-1, keepdim=True)
-        eeg_std = torch.std(eeg_data, dim=-1, keepdim=True)
-        nirs_mean = torch.mean(nirs_data, dim=-1, keepdim=True)
-        nirs_std = torch.std(nirs_data, dim=-1, keepdim=True)
-        eeg_data = (eeg_data - eeg_mean) / eeg_std
-        nirs_data = (nirs_data - nirs_mean) / nirs_std
+        eeg_data = GAF(eeg_data, 'eeg')
+        nirs_data = GAF(nirs_data, 'fnirs')
         return [eeg_data, eeg_labels, nirs_data, nirs_labels]
 
     def get_split_data(self):
@@ -144,13 +158,9 @@ class HybirdData:
         return [self.preprocess(train_data), self.preprocess(test_data)]
 
     def get_split_dataset(self):
-        eeg_data, eeg_labels, nirs_data, nirs_labels = self.get_proc_data()
-        l = list(range(eeg_data.shape[0]))
-        l = shuffle(l)
-        train_index = l[:int(len(l)*0.8)]
-        test_index = l[int(len(l)*0.8):]
-        train_hybrid_dataset = HybridDataset(eeg_data[train_index], eeg_labels[train_index], nirs_data[train_index], nirs_labels[train_index])
-        test_hybrid_dataset = HybridDataset(eeg_data[test_index], eeg_labels[test_index], nirs_data[test_index], nirs_labels[test_index])
+        train_data, test_data = self.get_split_data()
+        train_hybrid_dataset = HybridDataset(*train_data)
+        test_hybrid_dataset = HybridDataset(*test_data)
         return train_hybrid_dataset, test_hybrid_dataset
 
 

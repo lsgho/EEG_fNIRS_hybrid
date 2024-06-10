@@ -1,6 +1,6 @@
 import torch
 import os
-from models import FullNet
+from network import FullNet
 from data import HybridDataset
 from torch.utils.data import DataLoader
 

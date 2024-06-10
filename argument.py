@@ -8,12 +8,14 @@ parser.add_argument('--eeg_freq', default=200, type=int)
 parser.add_argument('--nirs_freq', default=10, type=int)
 parser.add_argument('--eeg_channel', default=30, type=int)
 parser.add_argument('--nirs_channel', default=36, type=int)
+parser.add_argument('--window_size', default=16, type=int)
 
 # 路径
 parser.add_argument('--eeg_path', default='process/process_data/EEG', type=str)
 parser.add_argument('--nirs_path', default='process/process_data/NIRS', type=str)
 parser.add_argument('--pretrain_out_path', default='pretrain/', type=str)
 parser.add_argument('--train_out_path', default='train/', type=str)
+parser.add_argument('--dataset_path', default='D:/Desktop/EEG/Datasets/EEG_fNIRS_hybrid_data/process_data/', type=str)
 
 # 训练参数
 parser.add_argument('--pre_epochs', default=100, type=int)
