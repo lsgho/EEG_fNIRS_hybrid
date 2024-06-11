@@ -13,9 +13,9 @@ from pyts.preprocessing import MaxAbsScaler
 
 def GAF(data, stype='eeg'):
     if stype == 'eeg':
-        gaf = GramianAngularField(image_size=1/args.window_size)
+        gaf = GramianAngularField(image_size=1/args.eeg_window_size)
     else:
-        gaf = GramianAngularField()
+        gaf = GramianAngularField(image_size=1/args.nirs_window_size)
     scaler = MaxAbsScaler()
     trial, channel = data.shape[0], data.shape[1]
     data_list = []
