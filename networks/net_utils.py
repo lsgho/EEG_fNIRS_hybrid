@@ -17,6 +17,22 @@ class ChannelWeights(nn.Module):
                     nn.ReLU(inplace=True),
                     nn.Linear(self.dim * 4 // reduction, self.dim * 2),
                     nn.Sigmoid())
+        self.apply(self._init_weights)
+
+    def _init_weights(self, m):
+        if isinstance(m, nn.Linear):
+            trunc_normal_(m.weight, std=.02)
+            if isinstance(m, nn.Linear) and m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        elif isinstance(m, nn.LayerNorm):
+            nn.init.constant_(m.bias, 0)
+            nn.init.constant_(m.weight, 1.0)
+        elif isinstance(m, nn.Conv2d):
+            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
+            fan_out //= m.groups
+            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
+            if m.bias is not None:
+                m.bias.data.zero_()
 
     def forward(self, x1, x2):
         B, _, H, W = x1.shape
@@ -26,7 +42,9 @@ class ChannelWeights(nn.Module):
         y = torch.cat((avg, max), dim=1) # B 4C
         y = self.mlp(y).view(B, self.dim * 2, 1)
         channel_weights = y.reshape(B, 2, self.dim, 1, 1).permute(1, 0, 2, 3, 4) # 2 B C 1 1
-        return channel_weights
+        outx1 = channel_weights[0] * x1 + x1
+        outx2 = channel_weights[1] * x2 + x2
+        return outx1, outx2
 
 
 class CrossAttention(nn.Module):
