@@ -3,6 +3,8 @@ import math
 import torch.nn as nn
 from layers.drop import DropPath
 from layers.weight_init import trunc_normal_
+from torch.nn.functional import interpolate
+from blocks import Mlp
 
 
 # Feature Rectify Module
@@ -36,10 +38,15 @@ class ChannelWeights(nn.Module):
 
     def forward(self, x1, x2):
         B, _, H, W = x1.shape
-        x = torch.cat((x1, x2), dim=1)
-        avg = self.avg_pool(x).view(B, self.dim * 2)
-        max = self.max_pool(x).view(B, self.dim * 2)
-        y = torch.cat((avg, max), dim=1) # B 4C
+        avg_x1 = self.avg_pool(x1).reshape(B, -1)
+        max_x1 = self.max_pool(x1).reshape(B, -1)
+        avg_x2 = self.avg_pool(x2).reshape(B, -1)
+        max_x2 = self.max_pool(x2).reshape(B, -1)
+        y = torch.cat((avg_x1, avg_x2, max_x1, max_x2), dim=1)
+        # x = torch.cat((x1, x2), dim=1)
+        # avg = self.avg_pool(x).view(B, self.dim * 2)
+        # max = self.max_pool(x).view(B, self.dim * 2)
+        # y = torch.cat((avg, max), dim=1) # B 4C
         y = self.mlp(y).view(B, self.dim * 2, 1)
         channel_weights = y.reshape(B, 2, self.dim, 1, 1).permute(1, 0, 2, 3, 4) # 2 B C 1 1
         outx1 = channel_weights[0] * x1 + x1
@@ -86,8 +93,16 @@ class CrossAttention(nn.Module):
             if m.bias is not None:
                 m.bias.data.zero_()
 
-    def forward(self, x, y, H, W):
-        B, N, C = x.shape
+    def forward(self, x, y):
+        # x: B C H W  // y: B C H' W'
+        assert x.shape[2] > y.shape[2], 'x.shape should be large than y.shape'
+        B, C, H, W = y.shape
+        x = interpolate(x, (H, W), mode='bilinear')
+
+        N = H * W
+        x = x.reshape(B, N, -1)
+        y = y.reshape(B, N, -1)
+
         # B N C -> B N num_head C//num_head -> B C//num_head N num_heads
         q = self.q(y).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
 
@@ -108,64 +123,6 @@ class CrossAttention(nn.Module):
         x = self.proj(x)
         x = self.proj_drop(x)
 
-        return x
-
-
-class DWConv(nn.Module):
-    """
-    Depthwise convolution bloc: input: x with size(B N C); output size (B N C)
-    """
-    def __init__(self, dim=768):
-        super(DWConv, self).__init__()
-        self.dwconv = nn.Conv2d(dim, dim, kernel_size=3, stride=1, padding=1, bias=True, groups=dim)
-
-    def forward(self, x, H, W):
-        B, N, C = x.shape
-        x = x.permute(0, 2, 1).reshape(B, C, H, W).contiguous() # B N C -> B C N -> B C H W
-        x = self.dwconv(x)
-        x = x.flatten(2).transpose(1, 2) # B C H W -> B N C
-
-        return x
-
-
-class Mlp(nn.Module):
-    def __init__(self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.):
-        super().__init__()
-        """
-        MLP Block: 
-        """
-        out_features = out_features or in_features
-        hidden_features = hidden_features or in_features
-        self.fc1 = nn.Linear(in_features, hidden_features)
-        self.dwconv = DWConv(hidden_features)
-        self.act = act_layer()
-        self.fc2 = nn.Linear(hidden_features, out_features)
-        self.drop = nn.Dropout(drop)
-
-        self.apply(self._init_weights)
-
-    def _init_weights(self, m):
-        if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
-            if isinstance(m, nn.Linear) and m.bias is not None:
-                nn.init.constant_(m.bias, 0)
-        elif isinstance(m, nn.LayerNorm):
-            nn.init.constant_(m.bias, 0)
-            nn.init.constant_(m.weight, 1.0)
-        elif isinstance(m, nn.Conv2d):
-            fan_out = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-            fan_out //= m.groups
-            m.weight.data.normal_(0, math.sqrt(2.0 / fan_out))
-            if m.bias is not None:
-                m.bias.data.zero_()
-
-    def forward(self, x, H, W):
-        x = self.fc1(x)
-        x = self.dwconv(x, H, W)
-        x = self.act(x)
-        x = self.drop(x)
-        x = self.fc2(x)
-        x = self.drop(x)
         return x
 
 
@@ -205,7 +162,7 @@ class CrossBlock(nn.Module):
                 m.bias.data.zero_()
 
     def forward(self, x, H, W):
-        x = x + self.drop_path(self.attn(self.norm1(x), H, W))
+        x = x + self.drop_path(self.attn(self.norm1(x)))
         x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
 
         return x

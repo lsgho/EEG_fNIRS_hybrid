@@ -4,6 +4,9 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 import math
 from easydict import EasyDict as edict
+from pyts.image import GramianAngularField
+import mne
+
 
 class HybridData(Dataset):
     def __init__(self, setting):
@@ -13,11 +16,12 @@ class HybridData(Dataset):
         self.sub_num = setting.sub_num
         self.trial_num = setting.trial_num
         self.task = setting.task
+        self.eeg_channels = setting.eeg_channels
         self.nirs_type = setting.nirs_type
         self.sub_list = []
         self.eeg_data = loadmat(self.eeg_path + self.task + '/' + 'subjects_' + self.task.lower() + '.mat')
         self.nirs_data = loadmat(self.nirs_path + self.task + '/' + 'subjects_' + self.task.lower() + '_' + self.nirs_type + '.mat')
-
+        self.clab = [x[0] for x in self.eeg_data['subjects'][0, 0]['clab'][0]]
         self._init()
 
     def __len__(self):
@@ -31,9 +35,34 @@ class HybridData(Dataset):
         if isinstance(nirs_label, torch.Tensor):
             assert torch.equal(eeg_label, nirs_label), f'eeg and nirs labels do not match'
 
+        eeg_data = self.ica(eeg_data)
         output_dict = edict(eeg_data=eeg_data, nirs_data=nirs_data, label=eeg_label)
+
+        output_dict = self._get_gaf(output_dict)
         return output_dict
 
+    def ica(self, eeg_data):
+        montage = mne.channels.make_standard_montage('standard_1005')
+        info = mne.create_info(ch_names=self.clab, sfreq=200, ch_types=['eeg']*(self.eeg_channels-2)+['eog']*2)
+        info.set_montage(montage)
+        mean_ = torch.mean(eeg_data, dim=-1, keepdim=True)
+        std_ = torch.std(eeg_data, dim=-1, keepdim=True)
+        tmp = (eeg_data - mean_)/std_
+        raw = mne.EpochsArray(tmp, info)
+        # raw.plot(scalings=5)
+        # raw.plot_sensors(ch_type='all')
+        raw.filter(l_freq=1, h_freq=None)
+        ica = mne.preprocessing.ICA()
+        ica.fit(raw)
+        eog_idx, eog_score = ica.find_bads_eog(raw)
+        ica.exclude = eog_idx
+        # ica.plot_scores(eog_score)
+        # ica.plot_properties(raw, eog_idx)
+
+        # ica.plot_components()
+        ica.apply(raw)
+        # raw.plot(scalings=5)
+        return raw.get_data()
 
     def _init(self):
         for i in range(self.sub_num):
@@ -42,6 +71,30 @@ class HybridData(Dataset):
                     self.sub_list.append(f'subject_0{i+1}_trial_{j+1}')
                 else:
                     self.sub_list.append(f'subject_{i+1}_trial_{j+1}')
+
+    def _get_gaf(self, data_dict):
+        dict_ = edict()
+        gaf_eeg = GramianAngularField(image_size=1/config.window_size)
+        gaf_nirs = GramianAngularField()
+        if len(data_dict.eeg_data.shape) == 2:
+            eeg_tmp = gaf_eeg.transform(data_dict.eeg_data)
+            nirs_tmp = gaf_nirs.transform(data_dict.nirs_data)
+            dict_.eeg_data = torch.from_numpy(eeg_tmp)
+            dict_.nirs_data = torch.from_numpy(nirs_tmp)
+            dict_.label = data_dict.label
+        elif len(data_dict.eeg_data.shape) == 3:
+            eeg_list = []
+            nirs_list = []
+            for i in range(data_dict.eeg_data.shape[0]):
+                eeg_tmp = gaf_eeg.transform(data_dict.eeg_data[i])
+                nirs_tmp = gaf_nirs.transform(data_dict.nirs_data[i])
+                eeg_list.append(torch.from_numpy(eeg_tmp))
+                nirs_list.append(torch.from_numpy(nirs_tmp))
+            dict_.eeg_data = torch.stack(eeg_list)
+            dict_.nirs_data = torch.stack(nirs_list)
+            dict_.label = data_dict.label
+        return dict_
+
 
     def _get_eeg_data(self, index):
         if isinstance(index, int):
@@ -111,3 +164,4 @@ def get_dataloader(setting, dataset, name):
 
     dataloader = DataLoader(dataset, setting.batch_size, True, drop_last=True)
     return dataloader
+
