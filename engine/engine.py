@@ -31,8 +31,6 @@ class Engine(object):
         logger.info(
             "PyTorch Version {}".format(torch.__version__))
         self.state = State()
-        self.devices = None
-        self.distributed = False
 
         if custom_parser is None:
             self.parser = argparse.ArgumentParser()
@@ -44,20 +42,6 @@ class Engine(object):
         self.args = self.parser.parse_args()
 
         self.continue_state_object = self.args.continue_fpath
-
-        if 'WORLD_SIZE' in os.environ:
-            self.distributed = int(os.environ['WORLD_SIZE']) > 1
-        
-        if self.distributed:
-            self.local_rank = self.args.local_rank
-            self.world_size = int(os.environ['WORLD_SIZE'])
-            torch.cuda.set_device(self.local_rank)
-            os.environ['MASTER_PORT'] = self.args.port
-            dist.init_process_group(backend="nccl", world_size=self.world_size, init_method='env://')
-            self.devices = [i for i in range(self.world_size)]
-        else:
-            self.devices = parse_devices(self.args.devices)
-
 
     def inject_default_parser(self):
         p = self.parser
@@ -128,15 +112,15 @@ class Engine(object):
 
     def restore_checkpoint(self):
         t_start = time.time()
-        if self.distributed:
-            # load the model on cpu first to avoid GPU RAM surge
-            # when loading a model checkpoint
-            # tmp = torch.load(self.continue_state_object,
-            #                  map_location=lambda storage, loc: storage.cuda(
-            #                      self.local_rank))
-            tmp = torch.load(self.continue_state_object, map_location=torch.device('cpu'))
-        else:
-            tmp = torch.load(self.continue_state_object)
+        # if self.distributed:
+        #     # load the model on cpu first to avoid GPU RAM surge
+        #     # when loading a model checkpoint
+        #     # tmp = torch.load(self.continue_state_object,
+        #     #                  map_location=lambda storage, loc: storage.cuda(
+        #     #                      self.local_rank))
+        #     tmp = torch.load(self.continue_state_object, map_location=torch.device('cpu'))
+        # else:
+        tmp = torch.load(self.continue_state_object)
         t_ioend = time.time()
         self.state.model = load_model(self.state.model, tmp['model'], is_restore=True)
         self.state.optimizer.load_state_dict(tmp['optimizer'])

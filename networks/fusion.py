@@ -96,8 +96,8 @@ class CrossAttention(nn.Module):
     def forward(self, x, y):
         # x: B C H W  // y: B C H' W'
         assert x.shape[2] > y.shape[2], 'x.shape should be large than y.shape'
-        B, C, H, W = y.shape
-        x = interpolate(x, (H, W), mode='bilinear')
+        B, C, H, W = x.shape
+        y = interpolate(y, (H, W), mode='bilinear')
 
         N = H * W
         x = x.reshape(B, N, -1)

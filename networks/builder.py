@@ -9,7 +9,7 @@ from engine.logger import get_logger
 logger = get_logger()
 
 class EncoderDecoder(nn.Module):
-    def __init__(self, cfg=None, criterion=nn.CrossEntropyLoss(reduction='mean', label_smoothing=0.05), norm_layer=nn.BatchNorm2d):
+    def __init__(self, cfg=None, criterion=nn.CrossEntropyLoss(reduction='mean'), norm_layer=nn.BatchNorm2d):
         super(EncoderDecoder, self).__init__()
         self.channel = [32, 64, 160, 256]
         self.encoder = mit_b0()

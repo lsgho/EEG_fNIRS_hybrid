@@ -10,11 +10,12 @@ class DecoderHead(nn.Module):
         self.conv2 = nn.Conv2d(in_channels[1], in_channels[2], 3)
         self.conv3 = nn.Conv2d(in_channels[2], in_channels[3], 3)
         self.conv4 = nn.Conv2d(in_channels[3], in_channels[4], 3)
-        self.conv5 = nn.Conv2d(in_channels[4], num_classes, 1)
+        self.conv5 = nn.Conv2d(in_channels[4], 1, 1)
         self.batchnorm1 = norm_layer(in_channels[2])
         self.batchnorm2 = norm_layer(in_channels[3])
         self.batchnorm3 = norm_layer(in_channels[4])
-        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.linear = nn.Linear((512//32)^2, num_classes)
+        self.relu = nn.ReLU(inplace=True)
 
     def forward(self, x):
         c1, c2, c3, c4 = x
@@ -25,7 +26,8 @@ class DecoderHead(nn.Module):
         tmp = torch.cat((self.conv3(tmp), c4), dim=1)
         tmp = self.batchnorm3(tmp)
         tmp = self.conv5(tmp)
-        tmp = self.pool(tmp)
-        y = tmp.flatten(1)
+        tmp = tmp.flatten(1)
+        tmp = self.relu(tmp)
+        y = self.linear(tmp)
         return y
 
