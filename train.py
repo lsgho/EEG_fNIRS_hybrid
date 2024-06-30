@@ -19,7 +19,6 @@ logger = get_logger()
 
 def train(type_='kfold'):
     with Engine() as engine:
-        seed = config.seed
         torch.manual_seed(config.seed)
         if torch.cuda.is_available():
             torch.cuda.manual_seed(config.seed)
@@ -31,9 +30,8 @@ def train(type_='kfold'):
             train_without_kfold(hybrid_data.get_dataset(), engine)
 
 
-
 def train_with_kfold(hybrid_data, engine):
-    kf = KFold(n_splits=5, random_state=config.seed)
+    kf = KFold(n_splits=5, random_state=config.seed, shuffle=True)
     logger.info('run KFold to adjust parameters')
     for i, (train_index, valid_index) in enumerate(kf.split(hybrid_data)):
         logger.info(f'Fold {i + 1}')
@@ -47,7 +45,7 @@ def train_with_kfold(hybrid_data, engine):
 
         norm_layer = nn.BatchNorm2d
         model = EncoderDecoder(config, norm_layer=norm_layer)
-        base_lr = config.base_lr
+        base_lr = config.lr
 
         params_list = []
         params_list = group_weight(params_list, model, norm_layer, base_lr)
@@ -213,3 +211,6 @@ def train_without_kfold(hybrid_dataset, engine):
             engine.save_and_link_checkpoint(config.checkpoint_dir,
                                             config.log_dir,
                                             config.log_dir_link)
+
+
+    train()

@@ -15,7 +15,7 @@ config.nirs_type = 'oxy'
 # config.nirs_type = 'deoxy'
 
 config.seed = 42
-config.eeg_window_size = 2000/512
+config.eeg_window_size = 2000 / 512 / 2000
 config.nirs_window_size = 1
 
 """ train config"""

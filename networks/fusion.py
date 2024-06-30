@@ -4,7 +4,7 @@ import torch.nn as nn
 from layers.drop import DropPath
 from layers.weight_init import trunc_normal_
 from torch.nn.functional import interpolate
-from blocks import Mlp
+from networks.blocks import Mlp
 
 
 # Feature Rectify Module

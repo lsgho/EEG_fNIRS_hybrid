@@ -1,3 +1,8 @@
+import numpy as np
+from os.path import isfile
+
+from pyts.approximation import PiecewiseAggregateApproximation
+
 from config import config
 from scipy.io import loadmat
 from torch.utils.data import Dataset, DataLoader
@@ -27,41 +32,51 @@ class HybridData:
         self.data_dict = self._divide_data()
 
     def _init_data(self):
-        sub_list = []
-        for i in range(self.sub_num):
-            for j in range(self.trial_num):
-                if i+1 < 10:
-                    sub_list.append(f'subject_0{i+1}_trial_{j+1}')
-                else:
-                    sub_list.append(f'subject_{i+1}_trial_{j+1}')
+        if isfile('eeg_data_ica.npy') and isfile('nirs_data.npy') and isfile('common_label.npy'):
+            eeg_data = np.load('eeg_data_ica.npy')
+            nirs_data = np.load('nirs_data.npy')
+            common_label = np.load('common_label.npy')
+        else:
+            sub_list = []
+            for i in range(self.sub_num):
+                for j in range(self.trial_num):
+                    if i+1 < 10:
+                        sub_list.append(f'subject_0{i+1}_trial_{j+1}')
+                    else:
+                        sub_list.append(f'subject_{i+1}_trial_{j+1}')
 
-        eeg_mat = loadmat(self.eeg_path + self.task + '/' + 'subjects_' + self.task.lower() + '.mat')
-        nirs_mat = loadmat(
-            self.nirs_path + self.task + '/' + 'subjects_' + self.task.lower() + '_' + self.nirs_type + '.mat')
+            eeg_mat = loadmat(self.eeg_path + self.task + '/' + 'subjects_' + self.task.lower() + '.mat')
+            nirs_mat = loadmat(
+                self.nirs_path + self.task + '/' + 'subjects_' + self.task.lower() + '_' + self.nirs_type + '.mat')
 
-        clab = [x[0] for x in eeg_mat['subjects'][0, 0]['clab'][0]]
+            clab = [x[0] for x in eeg_mat['subjects'][0, 0]['clab'][0]]
 
-        eeg_data, eeg_label = self._get_eeg_data(eeg_mat, sub_list)
-        nirs_data, nirs_label = self._get_nirs_data(nirs_mat, sub_list)
-        assert torch.equal(eeg_label, nirs_label), 'eeg label and nirs label do not match'
+            eeg_data, eeg_label = self._get_eeg_data(eeg_mat, sub_list)
+            nirs_data, nirs_label = self._get_nirs_data(nirs_mat, sub_list)
+            assert (eeg_label == nirs_label).all(), 'eeg label and nirs label do not match'
+            common_label = eeg_label
 
-        eeg_data = self._ica(eeg_data, clab)
+            eeg_data = self._ica(eeg_data, clab)
+            np.save('eeg_data_ica', eeg_data)
+            np.save('nirs_data', nirs_data)
+            np.save('common_label', eeg_label)
+
         eeg_data_scale = self._scale_data(eeg_data)
         nirs_data_scale = self._scale_data(nirs_data)
 
         eeg_gaf = self._get_gaf(eeg_data_scale, self.eeg_window)
         nirs_gaf = self._get_gaf(nirs_data_scale, self.nirs_window)
 
-        data_dict = edict(eeg_data = eeg_gaf, nirs_data = nirs_gaf, common_label = eeg_label)
+        data_dict = edict(eeg_data = eeg_gaf, nirs_data = nirs_gaf, common_label = common_label)
         return data_dict
 
     def _scale_data(self, data):
         data_list = []
         scaler = MaxAbsScaler()
-        for i in range(data.shape[0]):
+        for i in range(len(data)):
             tmp = scaler.transform(data[i])
-            data_list.append(torch.tensor(tmp))
-        return torch.stack(data_list, dim=0)
+            data_list.append(tmp)
+        return data_list
 
     def _divide_data(self):
         data_dict = self._init_data()
@@ -76,33 +91,43 @@ class HybridData:
         return data_dict
 
     def _ica(self, eeg_data, clab):
+        data_list = []
         montage = mne.channels.make_standard_montage('standard_1005')
         info = mne.create_info(ch_names=clab, sfreq=200, ch_types=['eeg'] * (self.eeg_channels - 2) + ['eog'] * 2)
         info.set_montage(montage)
-        # mean_ = torch.mean(eeg_data, dim=-1, keepdim=True)
-        # std_ = torch.std(eeg_data, dim=-1, keepdim=True)
-        # tmp = (eeg_data - mean_)/std_
-        raw = mne.EpochsArray(eeg_data, info)
+        for i in range(eeg_data.shape[0]):
+            # mean_ = torch.mean(eeg_data, dim=-1, keepdim=True)
+            # std_ = torch.std(eeg_data, dim=-1, keepdim=True)
+            # tmp = (eeg_data - mean_)/std_
+            raw = mne.io.RawArray(eeg_data[i], info)
+            # raw.plot(scalings=5)
+            # raw.plot_sensors(ch_type='all')
+            raw.filter(l_freq=1, h_freq=None)
+            ica = mne.preprocessing.ICA()
+            ica.fit(raw)
+            eog_idx, eog_score = ica.find_bads_eog(raw)
+            ica.exclude = eog_idx
+            # ica.plot_scores(eog_score)
+            # ica.plot_properties(raw, eog_idx)
+            # ica.plot_components()
+            process = ica.apply(raw)
+            data_list.append(process.get_data()[:self.eeg_channels-2])
+            del raw, ica, process
         # raw.plot(scalings=5)
-        # raw.plot_sensors(ch_type='all')
-        raw.filter(l_freq=1, h_freq=None)
-        ica = mne.preprocessing.ICA()
-        ica.fit(raw)
-        eog_idx, eog_score = ica.find_bads_eog(raw)
-        ica.exclude = eog_idx
-        # ica.plot_scores(eog_score)
-        # ica.plot_properties(raw, eog_idx)
-        # ica.plot_components()
-        ica.apply(raw)
-        # raw.plot(scalings=5)
-        return raw.get_data()
+        return data_list
 
-    def _get_gaf(self, data, window):
-        gaf = GramianAngularField(image_size=1/window)
+    def _get_gaf(self, data, window=None):
+        if window is None:
+            trans = PiecewiseAggregateApproximation()
+        else:
+            trans = PiecewiseAggregateApproximation(window_size=window)
+        gaf = GramianAngularField()
         data_list = []
-        for i in range(data.shape[0]):
-            tmp = gaf.transform(data[i])
+        for i in range(len(data)):
+            tmp = trans.transform(data[i])
+            tmp = gaf.transform(tmp)
             data_list.append(torch.from_numpy(tmp))
+            del tmp
         data_list = torch.stack(data_list)
         return data_list
 
@@ -112,10 +137,10 @@ class HybridData:
         for idx in range(len(sub_list)):
             eeg_data_ = eeg_data['subjects'][0, 0][sub_list[idx]][0, 0]
             data = eeg_data_['data']
-            data_list.append(torch.from_numpy(data))
+            data_list.append(data)
             label = eeg_data_['label'][0, 0]
             label_list.append(label)
-        return [torch.stack(data_list), torch.tensor(label_list)]
+        return [np.stack(data_list), np.array(label_list)]
 
     def _get_nirs_data(self, nirs_data, sub_list):
         data_list = []
@@ -123,10 +148,10 @@ class HybridData:
         for idx in range(len(sub_list)):
             nirs_data_ = nirs_data['subjects_' + self.nirs_type][0, 0][sub_list[idx]][0, 0]
             data = nirs_data_['data']
-            data_list.append(torch.from_numpy(data))
+            data_list.append(data)
             label = nirs_data_['label'][0, 0]
             label_list.append(label)
-        return [torch.stack(data_list), torch.tensor(label_list)]
+        return [np.stack(data_list), np.array(label_list)]
 
     def get_dataset(self):
         return HybridDataset(self.data_dict.eeg_data, self.data_dict.nirs_data, self.data_dict.common_label)
@@ -157,6 +182,3 @@ class HybridDataset(Dataset):
 
     def __getitem__(self, item):
         return [self.eeg_data[item], self.nirs_data[item], self.common_label[item]]
-
-tmp = HybridData(config, 'train')[3, 4]
-print(tmp)

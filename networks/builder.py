@@ -1,8 +1,8 @@
 import torch
 from torch import nn
 from utils.init_func import init_weight
-from decoder import DecoderHead
-from encoder import mit_b0
+from networks.decoder import DecoderHead
+from networks.encoder import mit_b0
 from engine.logger import get_logger
 
 

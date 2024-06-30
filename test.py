@@ -83,9 +83,8 @@ class Evaluator(object):
 
 
 def test():
-    with Engine() as engine:
-        hybrid_data = HybridData(config, 'test')
-        model = EncoderDecoder()
-        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        evaluator = Evaluator(hybrid_data.get_dataset(), model, device)
-        evaluator.run(config.model_path, config.model_indice)
+    hybrid_data = HybridData(config, 'test')
+    model = EncoderDecoder()
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    evaluator = Evaluator(hybrid_data.get_dataset(), model, device)
+    evaluator.run(config.model_path, config.model_indice)

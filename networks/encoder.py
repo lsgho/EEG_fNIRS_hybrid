@@ -2,8 +2,8 @@ from torch import nn
 import torch
 import math
 from layers.weight_init import trunc_normal_
-from blocks import Block, OverlapPatchEmbed
-from fusion import ChannelWeights, CrossBlock
+from networks.blocks import Block, OverlapPatchEmbed
+from networks.fusion import ChannelWeights, CrossBlock
 from functools import partial
 from torch.nn.functional import interpolate
 
@@ -40,15 +40,15 @@ class HybridTransformer(nn.Module):
         self.patch_embed4 = OverlapPatchEmbed(img_size=img_size // 16, patch_size=3, stride=2, in_chans=embed_dims[2],
                                               embed_dim=embed_dims[3])
 
-        self.extra_patch_embed1 = OverlapPatchEmbed(img_size=img_size, patch_size=7, stride=4, in_chans=in_chans[1],
+        self.extra_patch_embed1 = OverlapPatchEmbed(img_size=img_size, patch_size=3, stride=2, in_chans=in_chans[1],
                                                     embed_dim=embed_dims[0])
-        self.extra_patch_embed2 = OverlapPatchEmbed(img_size=img_size // 4, patch_size=3, stride=2,
+        self.extra_patch_embed2 = OverlapPatchEmbed(img_size=img_size // 2, patch_size=3, stride=2,
                                                     in_chans=embed_dims[0],
                                                     embed_dim=embed_dims[1])
-        self.extra_patch_embed3 = OverlapPatchEmbed(img_size=img_size // 8, patch_size=3, stride=2,
+        self.extra_patch_embed3 = OverlapPatchEmbed(img_size=img_size // 4, patch_size=3, stride=2,
                                                     in_chans=embed_dims[1],
                                                     embed_dim=embed_dims[2])
-        self.extra_patch_embed4 = OverlapPatchEmbed(img_size=img_size // 16, patch_size=3, stride=2,
+        self.extra_patch_embed4 = OverlapPatchEmbed(img_size=img_size // 8, patch_size=3, stride=2,
                                                     in_chans=embed_dims[2],
                                                     embed_dim=embed_dims[3])
 
@@ -223,6 +223,7 @@ class HybridTransformer(nn.Module):
         return outs
 
     def forward(self, x, y):
+        x = interpolate(x, (512, 512), mode='bilinear')
         y = interpolate(y, (224, 224), mode='bilinear')
         out = self.forward_features(x, y)
         return out
