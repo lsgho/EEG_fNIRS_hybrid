@@ -37,7 +37,7 @@ class ChannelWeights(nn.Module):
                 m.bias.data.zero_()
 
     def forward(self, x1, x2):
-        B, _, H, W = x1.shape
+        B = x1.shape[0]
         avg_x1 = self.avg_pool(x1).reshape(B, -1)
         max_x1 = self.max_pool(x1).reshape(B, -1)
         avg_x2 = self.avg_pool(x2).reshape(B, -1)
@@ -93,33 +93,26 @@ class CrossAttention(nn.Module):
             if m.bias is not None:
                 m.bias.data.zero_()
 
-    def forward(self, x, y):
-        # x: B C H W  // y: B C H' W'
-        assert x.shape[2] > y.shape[2], 'x.shape should be large than y.shape'
-        B, C, H, W = x.shape
-        y = interpolate(y, (H, W), mode='bilinear')
-
-        N = H * W
-        x = x.reshape(B, N, -1)
-        y = y.reshape(B, N, -1)
-
+    def forward(self, x, y, H, W, H_, W_):
+        # x: B N C
+        B, _, C = x.shape
         # B N C -> B N num_head C//num_head -> B C//num_head N num_heads
-        q = self.q(y).reshape(B, N, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
+        q = self.q(x).reshape(B, -1, self.num_heads, C // self.num_heads).permute(0, 2, 1, 3)
 
         if self.sr_ratio > 1:
-            x_ = x.permute(0, 2, 1).reshape(B, C, H, W)
-            x_ = self.sr(x_).reshape(B, C, -1).permute(0, 2, 1)
-            x_ = self.norm(x_)
-            kv = self.kv(x_).reshape(B, -1, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+            y_ = y.permute(0, 2, 1).reshape(B, C, H_, W_)
+            y_ = self.sr(y_).reshape(B, C, -1).permute(0, 2, 1)
+            y_ = self.norm(y_)
+            kv = self.kv(y_).reshape(B, -1, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         else:
-            kv = self.kv(x).reshape(B, -1, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+            kv = self.kv(y).reshape(B, -1, 2, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
         k, v = kv[0], kv[1]
 
-        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = (q @ k.transpose(-2, -1)) * self.scale            #
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
 
-        x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+        x = (attn @ v).transpose(1, 2).reshape(B, -1, C)
         x = self.proj(x)
         x = self.proj_drop(x)
 
@@ -134,6 +127,7 @@ class CrossBlock(nn.Module):
                  drop_path=0., act_layer=nn.GELU, norm_layer=nn.LayerNorm, sr_ratio=1):
         super().__init__()
         self.norm1 = norm_layer(dim)
+        self.norm1_ = norm_layer(dim)
         self.attn = CrossAttention(
             dim,
             num_heads=num_heads, qkv_bias=qkv_bias, qk_scale=qk_scale,
@@ -161,8 +155,11 @@ class CrossBlock(nn.Module):
             if m.bias is not None:
                 m.bias.data.zero_()
 
-    def forward(self, x, H, W):
-        x = x + self.drop_path(self.attn(self.norm1(x)))
-        x = x + self.drop_path(self.mlp(self.norm2(x), H, W))
-
+    def forward(self, x, y, H, W, H_, W_):
+        B, C = x.shape[:2]
+        x = x.flatten(2).transpose(1, 2)
+        y = y.flatten(2).transpose(1, 2)
+        tmp = self.drop_path(self.attn(self.norm1(x), self.norm1_(y), H, W, H_, W_))
+        x = tmp + self.drop_path(self.mlp(self.norm2(tmp), H, W))
+        x = x.transpose(1, 2).reshape(B, C, H, W)
         return x

@@ -37,9 +37,8 @@ def train_with_kfold(hybrid_data, engine):
         logger.info(f'Fold {i + 1}')
         train_dataset = hybrid_data[train_index]
         valid_dataset = hybrid_data[valid_index]
-        train_dataloader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, num_workers=config.num_workers)
-        valid_dataloader = DataLoader(valid_dataset, batch_size=config.batch_size, shuffle=True, drop_last=True, num_workers=config.num_workers)
-
+        train_dataloader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
+        valid_dataloader = DataLoader(valid_dataset, batch_size=config.batch_size, shuffle=True, drop_last=True)
         tb_dir = config.tb_dir +'/kfold/{}'.format(time.strftime('%b-%d_%H-%M-%S', time.localtime()))
         tb = SummaryWriter(log_dir=tb_dir)
 
@@ -61,6 +60,7 @@ def train_with_kfold(hybrid_data, engine):
         niters_per_epoch = len(train_dataset) // config.batch_size + 1
         total_iteration = config.nepochs * niters_per_epoch
         lr_policy = WarmUpPolyLR(base_lr, config.lr_power, total_iteration, config.warm_up_epoch * niters_per_epoch)
+        loss_func = nn.CrossEntropyLoss(reduction='mean')
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         model = model.to(device)
@@ -84,10 +84,14 @@ def train_with_kfold(hybrid_data, engine):
             sum_loss = 0
             model.train()
             for idx in pbar_train:
-                eeg_data, nirs_data, common_label = train_loader.next()
-                eeg_data = eeg_data.cuda()
-                nirs_data = nirs_data.cuda()
-                common_label = common_label.cuda()
+                try:
+                    eeg_data, nirs_data, common_label = train_loader.next()
+                except StopIteration:
+                    train_loader = iter(train_dataloader)
+                    eeg_data, nirs_data, common_label = train_loader.next()
+                eeg_data = eeg_data.float().cuda()
+                nirs_data = nirs_data.float().cuda()
+                common_label = common_label.long().cuda()
 
                 loss = model(eeg_data, nirs_data, common_label)
 
@@ -120,18 +124,27 @@ def train_with_kfold(hybrid_data, engine):
 
             sum_loss = 0
             model.eval()
+            correct = 0
             with torch.no_grad():
                 for idx in pbar_valid:
-                    eeg_data, nirs_data, common_label = valid_loader.next()
-                    eeg_data = eeg_data.cuda()
-                    nirs_data = nirs_data.cuda()
-                    common_label = common_label.cuda()
-                    loss = model(eeg_data, nirs_data, common_label)
+                    try:
+                        eeg_data, nirs_data, common_label = valid_loader.next()
+                    except StopIteration:
+                        valid_loader = iter(valid_dataloader)
+                    eeg_data = eeg_data.float().cuda()
+                    nirs_data = nirs_data.float().cuda()
+                    common_label = common_label.long().cuda()
+
+                    y_pred = model(eeg_data, nirs_data)
+                    loss = loss_func(y_pred, common_label)
+                    # loss = model(eeg_data, nirs_data, common_label)
+                    y_pred = torch.argmax(y_pred, dim=1)
+                    correct += y_pred.eq(common_label.view_as(y_pred)).sum().item()
 
                     sum_loss += loss.item()
                     print_str = 'Epoch {}/{}'.format(epoch, config.nepochs) \
                                 + ' Iter {}/{}:'.format(idx + 1, niters_per_epoch) \
-                                + ' valid_loss=%.4f total_loss=%.4f' % (loss, (sum_loss / (idx + 1)))
+                                + ' valid_loss=%.4f total_loss=%.4f accuracy=%.4f' % (loss, (sum_loss / (idx + 1)), correct / len(common_label))
                     pbar_valid.set_description(print_str, refresh=False)
                     del loss
 
@@ -182,10 +195,14 @@ def train_without_kfold(hybrid_dataset, engine):
 
         sum_loss = 0
         for idx in pbar:
-            eeg_data, nirs_data, common_label = dataloader.next()
-            eeg_data = eeg_data.cuda()
-            nirs_data = nirs_data.cuda()
-            common_label = common_label.cuda()
+            try:
+                eeg_data, nirs_data, common_label = dataloader.next()
+            except StopIteration:
+                dataloader = iter(train_loader)
+                eeg_data, nirs_data, common_label = dataloader.next()
+            eeg_data = eeg_data.float().cuda()
+            nirs_data = nirs_data.float().cuda()
+            common_label = common_label.long().cuda()
             loss = model(eeg_data, nirs_data, common_label)
 
             optimizer.zero_grad()
@@ -213,4 +230,4 @@ def train_without_kfold(hybrid_dataset, engine):
                                             config.log_dir_link)
 
 
-    train()
+train()

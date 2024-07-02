@@ -61,22 +61,22 @@ class HybridData:
             np.save('nirs_data', nirs_data)
             np.save('common_label', eeg_label)
 
-        eeg_data_scale = self._scale_data(eeg_data)
-        nirs_data_scale = self._scale_data(nirs_data)
+        # eeg_data_scale = self._scale_data(eeg_data)
+        # nirs_data_scale = self._scale_data(nirs_data)
+        #
+        # eeg_gaf = self._get_gaf(eeg_data_scale, self.eeg_window)
+        # nirs_gaf = self._get_gaf(nirs_data_scale, self.nirs_window)
 
-        eeg_gaf = self._get_gaf(eeg_data_scale, self.eeg_window)
-        nirs_gaf = self._get_gaf(nirs_data_scale, self.nirs_window)
-
-        data_dict = edict(eeg_data = eeg_gaf, nirs_data = nirs_gaf, common_label = common_label)
+        data_dict = edict(eeg_data = eeg_data, nirs_data = nirs_data, common_label = common_label)
         return data_dict
 
-    def _scale_data(self, data):
-        data_list = []
-        scaler = MaxAbsScaler()
-        for i in range(len(data)):
-            tmp = scaler.transform(data[i])
-            data_list.append(tmp)
-        return data_list
+    # def _scale_data(self, data):
+    #     data_list = []
+    #     scaler = MaxAbsScaler()
+    #     for i in range(len(data)):
+    #         tmp = scaler.transform(data[i])
+    #         data_list.append(tmp)
+    #     return data_list
 
     def _divide_data(self):
         data_dict = self._init_data()
@@ -99,37 +99,37 @@ class HybridData:
             # mean_ = torch.mean(eeg_data, dim=-1, keepdim=True)
             # std_ = torch.std(eeg_data, dim=-1, keepdim=True)
             # tmp = (eeg_data - mean_)/std_
-            raw = mne.io.RawArray(eeg_data[i], info)
+            raw = mne.io.RawArray(eeg_data[i], info, verbose='critical')
             # raw.plot(scalings=5)
             # raw.plot_sensors(ch_type='all')
-            raw.filter(l_freq=1, h_freq=None)
-            ica = mne.preprocessing.ICA()
-            ica.fit(raw)
-            eog_idx, eog_score = ica.find_bads_eog(raw)
+            raw.filter(l_freq=1, h_freq=None, verbose='critical')
+            ica = mne.preprocessing.ICA(verbose='critical')
+            ica.fit(raw, verbose='critical')
+            eog_idx, eog_score = ica.find_bads_eog(raw, verbose='critical')
             ica.exclude = eog_idx
             # ica.plot_scores(eog_score)
             # ica.plot_properties(raw, eog_idx)
             # ica.plot_components()
-            process = ica.apply(raw)
+            process = ica.apply(raw, verbose='critical')
             data_list.append(process.get_data()[:self.eeg_channels-2])
             del raw, ica, process
         # raw.plot(scalings=5)
         return data_list
 
-    def _get_gaf(self, data, window=None):
-        if window is None:
-            trans = PiecewiseAggregateApproximation()
-        else:
-            trans = PiecewiseAggregateApproximation(window_size=window)
-        gaf = GramianAngularField()
-        data_list = []
-        for i in range(len(data)):
-            tmp = trans.transform(data[i])
-            tmp = gaf.transform(tmp)
-            data_list.append(torch.from_numpy(tmp))
-            del tmp
-        data_list = torch.stack(data_list)
-        return data_list
+    # def _get_gaf(self, data, window=None):
+    #     if window is None:
+    #         trans = PiecewiseAggregateApproximation()
+    #     else:
+    #         trans = PiecewiseAggregateApproximation(window_size=window)
+    #     gaf = GramianAngularField()
+    #     data_list = []
+    #     for i in range(len(data)):
+    #         tmp = trans.transform(data[i])
+    #         tmp = gaf.transform(tmp)
+    #         data_list.append(tmp.tolist())
+    #         del tmp
+    #     data_list = torch.tensor(data_list)
+    #     return data_list
 
     def _get_eeg_data(self, eeg_data, sub_list):
         data_list = []
@@ -177,8 +177,42 @@ class HybridDataset(Dataset):
         self.nirs_data = nirs_data
         self.common_label = common_label
 
+    def _scale_data(self, data):
+        data_list = []
+        scaler = MaxAbsScaler()
+        # for i in range(len(data)):
+        tmp = scaler.transform(data)
+            # data_list.append(tmp)
+        # return data_list
+        return tmp
+
+    def _get_gaf(self, data, window=None):
+        if window is None:
+            trans = PiecewiseAggregateApproximation()
+        else:
+            trans = PiecewiseAggregateApproximation(window_size=window)
+        gaf = GramianAngularField()
+        # data_list = []
+        # for i in range(len(data)):
+        tmp = trans.transform(data)
+        tmp = gaf.transform(tmp)
+        # data_list.append(torch.from_numpy(tmp).float())
+        # del tmp
+        # data_list = torch.stack(data_list)
+        # return data_list
+        return torch.from_numpy(tmp)
+
     def __len__(self):
         return self.eeg_data.shape[0]
 
     def __getitem__(self, item):
-        return [self.eeg_data[item], self.nirs_data[item], self.common_label[item]]
+        eeg_data = self.eeg_data[item]
+        nirs_data = self.nirs_data[item]
+        common_label = self.common_label[item]
+
+        eeg_gaf = self._get_gaf(self._scale_data(eeg_data), config.eeg_window_size)
+        nirs_gaf = self._get_gaf(nirs_data)
+        # common_label = torch.from_numpy(common_label)
+        return [eeg_gaf, nirs_gaf, common_label]
+
+

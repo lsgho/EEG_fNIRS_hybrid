@@ -126,10 +126,10 @@ class HybridTransformer(nn.Module):
             ChannelWeights(dim=embed_dims[3], reduction=1)])
 
         self.FFMs = nn.ModuleList([
-            CrossBlock(dim=embed_dims[0], num_heads=num_heads[0], norm_layer=norm_fuse),
-            CrossBlock(dim=embed_dims[1], num_heads=num_heads[1], norm_layer=norm_fuse),
-            CrossBlock(dim=embed_dims[2], num_heads=num_heads[2], norm_layer=norm_fuse),
-            CrossBlock(dim=embed_dims[3], num_heads=num_heads[3], norm_layer=norm_fuse)])
+            CrossBlock(dim=embed_dims[0], num_heads=num_heads[0]),
+            CrossBlock(dim=embed_dims[1], num_heads=num_heads[1]),
+            CrossBlock(dim=embed_dims[2], num_heads=num_heads[2]),
+            CrossBlock(dim=embed_dims[3], num_heads=num_heads[3])])
 
         self.apply(self._init_weights)
 
@@ -167,7 +167,7 @@ class HybridTransformer(nn.Module):
         x_eeg = x_eeg.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         x_fnirs = x_fnirs.reshape(B, H_, W_, -1).permute(0, 3, 1, 2).contiguous()
         x_eeg, x_fnirs = self.FRMs[0](x_eeg, x_fnirs)
-        x_fused = self.FFMs[0](x_eeg, x_fnirs)
+        x_fused = self.FFMs[0](x_eeg, x_fnirs, H, W, H_, W_)    # runtime error
         outs.append(x_fused)
 
         # stage 2
@@ -184,7 +184,7 @@ class HybridTransformer(nn.Module):
         x_eeg = x_eeg.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         x_fnirs = x_fnirs.reshape(B, H_, W_, -1).permute(0, 3, 1, 2).contiguous()
         x_eeg, x_fnirs = self.FRMs[1](x_eeg, x_fnirs)
-        x_fused = self.FFMs[1](x_eeg, x_fnirs)
+        x_fused = self.FFMs[1](x_eeg, x_fnirs, H, W, H_, W_)
         outs.append(x_fused)
 
         # stage 3
@@ -201,7 +201,7 @@ class HybridTransformer(nn.Module):
         x_eeg = x_eeg.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         x_fnirs = x_fnirs.reshape(B, H_, W_, -1).permute(0, 3, 1, 2).contiguous()
         x_eeg, x_fnirs = self.FRMs[2](x_eeg, x_fnirs)
-        x_fused = self.FFMs[2](x_eeg, x_fnirs)
+        x_fused = self.FFMs[2](x_eeg, x_fnirs, H, W, H_, W_)
         outs.append(x_fused)
 
         # stage 4
@@ -218,13 +218,11 @@ class HybridTransformer(nn.Module):
         x_eeg = x_eeg.reshape(B, H, W, -1).permute(0, 3, 1, 2).contiguous()
         x_fnirs = x_fnirs.reshape(B, H_, W_, -1).permute(0, 3, 1, 2).contiguous()
         x_eeg, x_fnirs = self.FRMs[3](x_eeg, x_fnirs)
-        x_fused = self.FFMs[3](x_eeg, x_fnirs)
+        x_fused = self.FFMs[3](x_eeg, x_fnirs, H, W, H_, W_)
         outs.append(x_fused)
         return outs
 
     def forward(self, x, y):
-        x = interpolate(x, (512, 512), mode='bilinear')
-        y = interpolate(y, (224, 224), mode='bilinear')
         out = self.forward_features(x, y)
         return out
 

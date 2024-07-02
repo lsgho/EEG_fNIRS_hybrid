@@ -24,7 +24,7 @@ class EncoderDecoder(nn.Module):
 
     def forward(self, eeg_data, nirs_data, label=None):
         out = self.encoder(eeg_data, nirs_data)
-        out = self.decoder(out, out)
+        out = self.decoder(out)
         if label is not None:
             loss = self.criterion(out, label.long())
             return loss

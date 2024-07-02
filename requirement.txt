@@ -1,0 +1,5 @@
+easydict
+scipy
+scikit-learn
+pyts
+mne
