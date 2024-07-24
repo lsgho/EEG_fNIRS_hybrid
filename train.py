@@ -12,6 +12,7 @@ from dataset.hybridDataset import HybridData
 from sklearn.model_selection import KFold
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import CosineAnnealingLR
 from utils.lr_policy import WarmUpPolyLR
 from utils.init_func import init_weight, group_weight
 
@@ -51,7 +52,7 @@ def train_with_kfold(hybrid_data, engine):
 
         if config.optimizer == 'AdamW':
             optimizer = torch.optim.AdamW(params_list, lr=base_lr, betas=(0.9, 0.999), weight_decay=config.weight_decay)
-        elif config.optimizer == 'SGDM':
+        elif config.optimizer == 'SGD':
             optimizer = torch.optim.SGD(params_list, lr=base_lr, momentum=config.momentum,
                                         weight_decay=config.weight_decay)
         else:
@@ -59,7 +60,8 @@ def train_with_kfold(hybrid_data, engine):
 
         niters_per_epoch = len(train_dataset) // config.batch_size + 1
         total_iteration = config.nepochs * niters_per_epoch
-        lr_policy = WarmUpPolyLR(base_lr, config.lr_power, total_iteration, config.warm_up_epoch * niters_per_epoch)
+        # lr_policy = WarmUpPolyLR(base_lr, total_iteration, config.warm_up_epoch * niters_per_epoch)
+        scheduler = CosineAnnealingLR(optimizer, T_max=total_iteration, eta_min=base_lr/10)
         loss_func = nn.CrossEntropyLoss(reduction='mean')
 
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -98,17 +100,18 @@ def train_with_kfold(hybrid_data, engine):
                 optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+                scheduler.step()
 
-                current_idx = (epoch - 1) * niters_per_epoch + idx
-                lr = lr_policy.get_lr(current_idx)
-
-                for i in range(len(optimizer.param_groups)):
-                    optimizer.param_groups[i]['lr'] = lr
+                # current_idx = (epoch - 1) * niters_per_epoch + idx
+                # lr = lr_policy.get_lr(current_idx)
+                #
+                # for i in range(len(optimizer.param_groups)):
+                #     optimizer.param_groups[i]['lr'] = lr
 
                 sum_loss += loss.item()
                 print_str = 'Epoch {}/{}'.format(epoch, config.nepochs) \
                             + ' Iter {}/{}:'.format(idx + 1, niters_per_epoch) \
-                            + ' lr=%.4e' % lr \
+                            + ' lr=%.4e' % scheduler.get_last_lr()[-1] \
                             + ' train_loss=%.4f total_loss=%.4f' % (loss, (sum_loss / (idx + 1)))
 
                 del loss
@@ -123,8 +126,8 @@ def train_with_kfold(hybrid_data, engine):
                                                     config.log_dir_link)
 
             sum_loss = 0
-            model.eval()
             correct = 0
+            model.eval()
             with torch.no_grad():
                 for idx in pbar_valid:
                     try:
@@ -139,12 +142,13 @@ def train_with_kfold(hybrid_data, engine):
                     loss = loss_func(y_pred, common_label)
                     # loss = model(eeg_data, nirs_data, common_label)
                     y_pred = torch.argmax(y_pred, dim=1)
-                    correct += y_pred.eq(common_label.view_as(y_pred)).sum().item()
+                    correct_ = y_pred.eq(common_label.view_as(y_pred)).sum().item()
+                    correct += (correct_ / len(common_label))
 
                     sum_loss += loss.item()
                     print_str = 'Epoch {}/{}'.format(epoch, config.nepochs) \
                                 + ' Iter {}/{}:'.format(idx + 1, niters_per_epoch) \
-                                + ' valid_loss=%.4f total_loss=%.4f accuracy=%.4f' % (loss, (sum_loss / (idx + 1)), correct / len(common_label))
+                                + ' valid_loss=%.4f total_loss=%.4f accuracy=%.4f' % (loss, (sum_loss / (idx + 1)), (correct / (idx + 1)))
                     pbar_valid.set_description(print_str, refresh=False)
                     del loss
 
@@ -173,7 +177,7 @@ def train_without_kfold(hybrid_dataset, engine):
 
     niters_per_epoch = len(hybrid_dataset) // config.batch_size + 1
     total_iteration = config.nepochs * niters_per_epoch
-    lr_policy = WarmUpPolyLR(base_lr, config.lr_power, total_iteration, config.warm_up_epoch * niters_per_epoch)
+    lr_policy = WarmUpPolyLR(base_lr, total_iteration, config.warm_up_epoch * niters_per_epoch)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     model = model.to(device)
@@ -184,7 +188,6 @@ def train_without_kfold(hybrid_dataset, engine):
         engine.restore_checkpoint()
 
     optimizer.zero_grad()
-    model.train()
     logger.info('Start training...')
 
     for epoch in range(engine.state.epoch, config.nepochs+1):
@@ -193,6 +196,7 @@ def train_without_kfold(hybrid_dataset, engine):
                     bar_format=bar_format)
         dataloader = iter(train_loader)
 
+        model.train()
         sum_loss = 0
         for idx in pbar:
             try:

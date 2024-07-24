@@ -6,6 +6,7 @@
 # @File    : lr_policy.py.py
 
 from abc import ABCMeta, abstractmethod
+import math
 
 
 class BaseLR():
@@ -27,18 +28,17 @@ class PolyLR(BaseLR):
 
 
 class WarmUpPolyLR(BaseLR):
-    def __init__(self, start_lr, lr_power, total_iters, warmup_steps):
-        self.start_lr = start_lr
-        self.lr_power = lr_power
-        self.total_iters = total_iters + 0.0
+    def __init__(self, min_lr, max_lr, Tmax, warmup_steps):
+        self.min_lr = min_lr
+        self.max_lr = max_lr
+        self.t_max = Tmax
         self.warmup_steps = warmup_steps
 
     def get_lr(self, cur_iter):
         if cur_iter < self.warmup_steps:
-            return self.start_lr * (cur_iter / self.warmup_steps)
+            return (self.max_lr - self.min_lr) * (cur_iter / self.warmup_steps) + self.min_lr
         else:
-            return self.start_lr * (
-                    (1 - float(cur_iter) / self.total_iters) ** self.lr_power)
+            return (self.max_lr - self.min_lr) / 2 * math.cos(math.pi * cur_iter / self.t_max - math.pi * self.warmup_steps / self.t_max) + self.min_lr
 
 
 class MultiStageLR(BaseLR):

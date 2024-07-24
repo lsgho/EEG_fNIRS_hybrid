@@ -1,22 +1,18 @@
 import numpy as np
+import os
 from os.path import isfile
-
 from pyts.approximation import PiecewiseAggregateApproximation
-
 from config import config
 from scipy.io import loadmat
 from torch.utils.data import Dataset, DataLoader
 import torch
-import math
 from sklearn.model_selection import train_test_split
-from easydict import EasyDict as edict
 from pyts.image import GramianAngularField
 from pyts.preprocessing import MaxAbsScaler
-import mne
 
 
 class HybridData:
-    def __init__(self, setting, name):
+    def __init__(self, setting, run_type, mode='depend'):
         super().__init__()
         self.eeg_path = setting.eeg_path
         self.nirs_path = setting.nirs_path
@@ -25,149 +21,132 @@ class HybridData:
         self.task = setting.task
         self.eeg_channels = setting.eeg_channels
         self.nirs_type = setting.nirs_type
+        if self.nirs_type not in ['oxy', 'deoxy']:
+            raise ValueError('nirs_type must be either oxy or deoxy')
         self.eeg_window = setting.eeg_window_size
-        self.nirs_window = setting.nirs_window_size
         self.seed = setting.seed
-        self.name = name
+        self.run_type = run_type
+        self.mode = mode
         self.data_dict = self._divide_data()
 
-    def _init_data(self):
-        if isfile('eeg_data_ica.npy') and isfile('nirs_data.npy') and isfile('common_label.npy'):
-            eeg_data = np.load('eeg_data_ica.npy')
+    def _load_data(self):
+        if isfile('eeg_data.npy') and isfile('nirs_data.npy') and isfile('common_label.npy'):
+            eeg_data = np.load('eeg_data.npy')
             nirs_data = np.load('nirs_data.npy')
             common_label = np.load('common_label.npy')
         else:
-            sub_list = []
-            for i in range(self.sub_num):
-                for j in range(self.trial_num):
-                    if i+1 < 10:
-                        sub_list.append(f'subject_0{i+1}_trial_{j+1}')
-                    else:
-                        sub_list.append(f'subject_{i+1}_trial_{j+1}')
+            eeg_data_list = os.listdir(self.eeg_path + self.task.upper() + '/data/')
+            nirs_data_list = os.listdir(self.nirs_path + self.task.upper() + '/data/' + self.nirs_type)
+            eeg_label_list = os.listdir(self.eeg_path + self.task.upper() + '/label/')
+            nirs_label_list = os.listdir(self.nirs_path + self.task.upper() + '/label/')
 
-            eeg_mat = loadmat(self.eeg_path + self.task + '/' + 'subjects_' + self.task.lower() + '.mat')
-            nirs_mat = loadmat(
-                self.nirs_path + self.task + '/' + 'subjects_' + self.task.lower() + '_' + self.nirs_type + '.mat')
+            eeg_data = self._get_eeg_data(eeg_data_list)
+            nirs_data = self._get_nirs_data(nirs_data_list)
+            common_label = self._get_label(eeg_label_list, nirs_label_list)
 
-            clab = [x[0] for x in eeg_mat['subjects'][0, 0]['clab'][0]]
-
-            eeg_data, eeg_label = self._get_eeg_data(eeg_mat, sub_list)
-            nirs_data, nirs_label = self._get_nirs_data(nirs_mat, sub_list)
-            assert (eeg_label == nirs_label).all(), 'eeg label and nirs label do not match'
-            common_label = eeg_label
-
-            eeg_data = self._ica(eeg_data, clab)
-            np.save('eeg_data_ica', eeg_data)
+            np.save('eeg_data', eeg_data)
             np.save('nirs_data', nirs_data)
-            np.save('common_label', eeg_label)
+            np.save('common_label', common_label)
 
-        # eeg_data_scale = self._scale_data(eeg_data)
-        # nirs_data_scale = self._scale_data(nirs_data)
-        #
-        # eeg_gaf = self._get_gaf(eeg_data_scale, self.eeg_window)
-        # nirs_gaf = self._get_gaf(nirs_data_scale, self.nirs_window)
-
-        data_dict = edict(eeg_data = eeg_data, nirs_data = nirs_data, common_label = common_label)
+        data_dict = {'eeg_data': self._scale_data(eeg_data), 'nirs_data': self._scale_data(nirs_data), 'common_label': common_label}
         return data_dict
 
-    # def _scale_data(self, data):
-    #     data_list = []
-    #     scaler = MaxAbsScaler()
-    #     for i in range(len(data)):
-    #         tmp = scaler.transform(data[i])
-    #         data_list.append(tmp)
-    #     return data_list
+    def _scale_data(self, data):
+        min_vals = np.min(data, axis=-1, keepdims=True)
+        max_vals = np.max(data, axis=-1, keepdims=True)
+        scale_data = (data - min_vals) / (max_vals - min_vals)
+        return scale_data
 
     def _divide_data(self):
-        data_dict = self._init_data()
-        eeg_data = data_dict.eeg_data
-        nirs_data = data_dict.nirs_data
-        labels = data_dict.common_label
-        train_index, test_index = train_test_split(list(range(eeg_data.shape[0])), test_size=0.2, random_state=self.seed)
-        if self.name == 'train':
-            data_dict = edict(eeg_data = eeg_data[train_index], nirs_data = nirs_data[train_index], common_label = labels[train_index])
+        data_dict = self._load_data()
+        if self.mode == 'depend':
+            train_data_dict, test_data_dict = self._divide_depend_data(data_dict)
         else:
-            data_dict = edict(eeg_data = eeg_data[test_index], nirs_data = nirs_data[test_index], common_label = labels[test_index])
-        return data_dict
+            train_data_dict, test_data_dict = self._divide_independ_data(data_dict)
+        if self.run_type == 'test':
+            return test_data_dict
+        else:
+            return train_data_dict
 
-    def _ica(self, eeg_data, clab):
+    def _divide_depend_data(self, data_dict):
+        eeg_data = data_dict['eeg_data']
+        nirs_data = data_dict['nirs_data']
+        labels = data_dict['common_label']
+        train_eeg_data, train_nirs_data, train_label = [], [], []
+        test_eeg_data, test_nirs_data, test_label = [], [], []
+        for idx in range(len(eeg_data)):
+            eeg_train, eeg_test, nirs_train, nirs_test, y_train, y_test = train_test_split(eeg_data[idx], nirs_data[idx], labels[idx], random_state=self.seed, shuffle=True, train_size=0.8)
+            train_eeg_data.append(eeg_train)
+            train_nirs_data.append(nirs_train)
+            train_label.append(y_train)
+            test_eeg_data.append(eeg_test)
+            test_nirs_data.append(nirs_test)
+            test_label.append(y_test)
+        train_eeg_data = np.stack(train_eeg_data)
+        train_nirs_data = np.stack(train_nirs_data)
+        train_label = np.stack(train_label)
+        test_eeg_data = np.stack(test_eeg_data)
+        test_nirs_data = np.stack(test_nirs_data)
+        test_label = np.stack(test_label)
+        train_data_dict = {'eeg_data': train_eeg_data.reshape(-1, train_eeg_data.shape[2], train_eeg_data.shape[-1]), 'nirs_data': train_nirs_data.reshape(-1, train_nirs_data.shape[2], train_nirs_data.shape[-1]), 'common_label': train_label.reshape(-1)}
+        test_data_dict = {'eeg_data': test_eeg_data.reshape(-1, test_eeg_data.shape[2], test_eeg_data.shape[-1]), 'nirs_data': test_nirs_data.reshape(-1, test_nirs_data.shape[2], test_nirs_data.shape[-1]), 'common_label': test_label.reshape(-1)}
+        return [train_data_dict, test_data_dict]
+
+    def _divide_independ_data(self, data_dict):
+        eeg_data = data_dict['eeg_data']
+        eeg_data = eeg_data.reshape(-1, eeg_data.shape[2], eeg_data.shape[3])
+        nirs_data = data_dict['nirs_data']
+        nirs_data = nirs_data.reshape(-1, nirs_data.shape[2], nirs_data.shape[3])
+        labels = data_dict['common_label']
+        labels = labels.reshape(-1)
+        eeg_train, eeg_test, nirs_train, nirs_test, y_train, y_test = train_test_split(eeg_data, nirs_data, labels, random_state=self.seed, shuffle=True, train_size=0.8)
+        train_data_dict = {'eeg_data': eeg_train, 'nirs_data': nirs_train, 'common_label': y_train}
+        test_data_dict = {'eeg_data': eeg_test, 'nirs_data': nirs_test, 'common_label': y_test}
+        return [train_data_dict, test_data_dict]
+
+    def _get_eeg_data(self, sub_list):
         data_list = []
-        montage = mne.channels.make_standard_montage('standard_1005')
-        info = mne.create_info(ch_names=clab, sfreq=200, ch_types=['eeg'] * (self.eeg_channels - 2) + ['eog'] * 2)
-        info.set_montage(montage)
-        for i in range(eeg_data.shape[0]):
-            # mean_ = torch.mean(eeg_data, dim=-1, keepdim=True)
-            # std_ = torch.std(eeg_data, dim=-1, keepdim=True)
-            # tmp = (eeg_data - mean_)/std_
-            raw = mne.io.RawArray(eeg_data[i], info, verbose='critical')
-            # raw.plot(scalings=5)
-            # raw.plot_sensors(ch_type='all')
-            raw.filter(l_freq=1, h_freq=None, verbose='critical')
-            ica = mne.preprocessing.ICA(verbose='critical')
-            ica.fit(raw, verbose='critical')
-            eog_idx, eog_score = ica.find_bads_eog(raw, verbose='critical')
-            ica.exclude = eog_idx
-            # ica.plot_scores(eog_score)
-            # ica.plot_properties(raw, eog_idx)
-            # ica.plot_components()
-            process = ica.apply(raw, verbose='critical')
-            data_list.append(process.get_data()[:self.eeg_channels-2])
-            del raw, ica, process
-        # raw.plot(scalings=5)
-        return data_list
-
-    # def _get_gaf(self, data, window=None):
-    #     if window is None:
-    #         trans = PiecewiseAggregateApproximation()
-    #     else:
-    #         trans = PiecewiseAggregateApproximation(window_size=window)
-    #     gaf = GramianAngularField()
-    #     data_list = []
-    #     for i in range(len(data)):
-    #         tmp = trans.transform(data[i])
-    #         tmp = gaf.transform(tmp)
-    #         data_list.append(tmp.tolist())
-    #         del tmp
-    #     data_list = torch.tensor(data_list)
-    #     return data_list
-
-    def _get_eeg_data(self, eeg_data, sub_list):
-        data_list = []
-        label_list = []
         for idx in range(len(sub_list)):
-            eeg_data_ = eeg_data['subjects'][0, 0][sub_list[idx]][0, 0]
-            data = eeg_data_['data']
-            data_list.append(data)
-            label = eeg_data_['label'][0, 0]
-            label_list.append(label)
-        return [np.stack(data_list), np.array(label_list)]
+            eeg_mat = loadmat(self.eeg_path + self.task.upper() + '/data/' + sub_list[idx])
+            eeg_data = eeg_mat['data_'].transpose(2, 0, 1)
+            data_list.append(eeg_data)
+        return np.stack(data_list)
 
-    def _get_nirs_data(self, nirs_data, sub_list):
+    def _get_nirs_data(self, sub_list):
         data_list = []
-        label_list = []
         for idx in range(len(sub_list)):
-            nirs_data_ = nirs_data['subjects_' + self.nirs_type][0, 0][sub_list[idx]][0, 0]
-            data = nirs_data_['data']
-            data_list.append(data)
-            label = nirs_data_['label'][0, 0]
-            label_list.append(label)
-        return [np.stack(data_list), np.array(label_list)]
+            nirs_mat = loadmat(self.nirs_path + self.task.upper() + '/data/' + self.nirs_type + '/' +  sub_list[idx])
+            nirs_data = nirs_mat[self.nirs_type].transpose(2, 1, 0)
+            data_list.append(nirs_data)
+        return np.stack(data_list)
+
+    def _get_label(self, eeg_sub_list, nirs_sub_list):
+        label_eeg_list = []
+        label_nirs_list = []
+        for idx in range(len(eeg_sub_list)):
+            label_mat = loadmat(self.eeg_path + self.task.upper() + '/label/' + eeg_sub_list[idx])
+            label = label_mat['mark'].squeeze(-1)
+            label_eeg_list.append(label)
+        for idx in range(len(nirs_sub_list)):
+            label_mat = loadmat(self.nirs_path + self.task.upper() + '/label/' + nirs_sub_list[idx])
+            label = label_mat['mark'].squeeze(-1)
+            label_nirs_list.append(label)
+        label_eeg_list = np.stack(label_eeg_list)
+        label_nirs_list = np.stack(label_nirs_list)
+        assert np.array_equal(label_eeg_list, label_nirs_list), 'eeg_label and nirs_label is not equal'
+        return label_eeg_list
 
     def get_dataset(self):
-        return HybridDataset(self.data_dict.eeg_data, self.data_dict.nirs_data, self.data_dict.common_label)
+        return HybridDataset(self.data_dict['eeg_data'], self.data_dict['nirs_data'], self.data_dict['common_label'])
 
     def __getitem__(self, item):
-        data_dict = self.data_dict
-        eeg_data = data_dict.eeg_data[item]
-        nirs_data = data_dict.nirs_data[item]
-        common_label = data_dict.common_label[item]
+        eeg_data = self.data_dict['eeg_data'][item]
+        nirs_data = self.data_dict['nirs_data'][item]
+        common_label = self.data_dict['common_label'][item]
         return HybridDataset(eeg_data, nirs_data, common_label)
 
     def __len__(self):
-        if self.name == 'train':
-            return math.floor(self.trial_num * self.sub_num * 0.8)
-        else:
-            return self.trial_num * self.sub_num - math.floor(self.trial_num * self.sub_num * 0.8)
+        return len(self.data_dict['eeg_data'])
 
 
 class HybridDataset(Dataset):
@@ -210,9 +189,8 @@ class HybridDataset(Dataset):
         nirs_data = self.nirs_data[item]
         common_label = self.common_label[item]
 
-        eeg_gaf = self._get_gaf(self._scale_data(eeg_data), config.eeg_window_size)
-        nirs_gaf = self._get_gaf(nirs_data)
+        # eeg_gaf = self._get_gaf(self._scale_data(eeg_data), config.eeg_window_size)
+        # nirs_gaf = self._get_gaf(self._scale_data(nirs_data))
         # common_label = torch.from_numpy(common_label)
-        return [eeg_gaf, nirs_gaf, common_label]
-
+        return [eeg_data, nirs_data, common_label]
 

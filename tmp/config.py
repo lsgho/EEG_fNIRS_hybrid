@@ -20,10 +20,10 @@ config.seed = 42
 config.eeg_window_size = 4 / 2000
 
 """ train config"""
-config.batch_size = 32
+config.batch_size = 16
 config.num_workers = 8
 config.weight_decay = 0.01
-config.lr = 1e-5
+config.lr = 1e-2
 config.min_lr = 1e-7
 config.max_lr = config.lr
 

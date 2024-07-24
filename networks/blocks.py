@@ -2,7 +2,6 @@ from torch import nn
 import math
 import torch
 from layers.drop import DropPath
-from layers.grid import ndgrid
 from layers.helpers import to_2tuple
 from layers.weight_init import trunc_normal_
 
